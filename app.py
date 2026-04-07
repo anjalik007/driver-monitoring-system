@@ -1,3 +1,14 @@
+import os
+import importlib.metadata
+
+# --- THE NINJA HACK ---
+# MediaPipe secretly installs a non-headless version of OpenCV that crashes cloud servers.
+# This code detects it and uninstalls it instantly before the app can crash.
+try:
+    importlib.metadata.version("opencv-contrib-python")
+    os.system("pip uninstall -y opencv-contrib-python")
+except importlib.metadata.PackageNotFoundError:
+    pass
 import streamlit as st
 import cv2
 import mediapipe as mp
