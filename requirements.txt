@@ -1,4 +1,5 @@
 streamlit
 opencv-python-headless
 mediapipe
-numpy
+protobuf==3.20.3
+numpy<2
