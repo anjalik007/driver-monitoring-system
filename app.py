@@ -42,10 +42,9 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("Live Camera Feed")
-    # Placeholders for the UI
     frame_placeholder = st.empty()
     alert_placeholder = st.empty()
-    audio_placeholder = st.empty() # Placeholder for the hidden audio tag
+    audio_placeholder = st.empty() 
 
 with col2:
     st.subheader("Live Metrics")
@@ -54,6 +53,11 @@ with col2:
     metric_pitch = st.empty()
     metric_closed = st.empty()
     metric_score = st.empty()
+    
+    # --- Fatigue Graph Section ---
+    st.markdown("---")
+    st.subheader("Fatigue Trend")
+    chart_placeholder = st.empty()
 
 # --- DMS Functions ---
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
@@ -88,6 +92,8 @@ if run_app:
     # State Variables
     PERCLOS_WINDOW_SECONDS = 10.0
     perclos_buffer = deque()
+    score_history = deque([0]*50, maxlen=50) # Buffer for the live graph
+    
     eye_closed = False
     eye_closed_start = None
     eye_closed_duration = 0
@@ -126,6 +132,7 @@ if run_app:
             raw_ear = (leftEAR + rightEAR) / 2.0
             raw_mar = MAR(landmarks, w, h)
 
+            # Head Tilt
             image_points = np.array([
                 (landmarks[NOSE].x*w, landmarks[NOSE].y*h),
                 (landmarks[LEFT_EYE[0]].x*w, landmarks[LEFT_EYE[0]].y*h),
@@ -146,6 +153,7 @@ if run_app:
             angles, _, _, _, _, _ = cv2.RQDecomp3x3(rmat)
             raw_pitch = abs(angles[0])
 
+            # Calibration
             if frame_count < CALIBRATION_FRAMES:
                 baseline_ear_sum += raw_ear
                 frame_count += 1
@@ -157,6 +165,7 @@ if run_app:
                 calibrated_ear_threshold = (baseline_ear_sum / CALIBRATION_FRAMES) * 0.75
                 frame_count += 1
 
+            # Smoothing
             if smoothed_ear == 0.0:
                 smoothed_ear, smoothed_mar, smoothed_pitch = raw_ear, raw_mar, raw_pitch
             else:
@@ -164,6 +173,7 @@ if run_app:
                 smoothed_mar = (EMA_ALPHA * raw_mar) + ((1 - EMA_ALPHA) * smoothed_mar)
                 smoothed_pitch = (EMA_ALPHA * raw_pitch) + ((1 - EMA_ALPHA) * smoothed_pitch)
 
+            # PERCLOS
             is_closed = 1 if smoothed_ear < calibrated_ear_threshold else 0
             perclos_buffer.append((current_time, is_closed))
 
@@ -172,6 +182,7 @@ if run_app:
 
             perclos = sum(state for _, state in perclos_buffer) / len(perclos_buffer) if len(perclos_buffer) > 0 else 0
 
+            # Duration
             if is_closed:
                 if not eye_closed:
                     eye_closed = True
@@ -182,18 +193,22 @@ if run_app:
                 eye_closed_start = None
                 eye_closed_duration = 0
 
+            # Scoring
             drowsy_score = 0
             if perclos > PERCLOS_THRESHOLD: drowsy_score += 1
             if smoothed_mar > MAR_THRESHOLD: drowsy_score += 1
             if smoothed_pitch > HEAD_TILT_THRESHOLD: drowsy_score += 1
             if eye_closed_duration > 1.5: drowsy_score += 2 
 
+            # Update graph history
+            score_history.append(drowsy_score)
+
             if drowsy_score >= 2:
                 alert_counter += 1
             else:
                 alert_counter = max(0, alert_counter - 1) 
 
-            # --- Alerts & Web Audio Logic ---
+            # Alerts
             if alert_counter > 10:
                 alert_placeholder.error("🚨 **DROWSINESS ALERT!** Please pull over and rest.")
                 cv2.putText(rgb, "!!! DROWSINESS ALERT !!!", (30, h-50), font, 1.5, color_black, 5, line_type)
@@ -206,24 +221,25 @@ if run_app:
             else:
                 alert_placeholder.empty()
                 if alarm_playing:
-                    audio_placeholder.empty() # Clears the HTML tag, stopping the sound
+                    audio_placeholder.empty() 
                     alarm_playing = False
 
+            # Draw
             for i in LEFT_EYE + RIGHT_EYE + MOUTH:
                 x, y = int(landmarks[i].x*w), int(landmarks[i].y*h)
                 cv2.circle(rgb, (x, y), 2, (0, 255, 0), -1)
 
+            # Update Metrics
             metric_perclos.metric("PERCLOS (10s Window)", f"{perclos:.2f}", 
                                   delta="High!" if perclos > PERCLOS_THRESHOLD else "Normal", 
                                   delta_color="inverse")
-            metric_mar.metric("MAR (Yawn Metric)", f"{smoothed_mar:.2f}",
-                              delta="High!" if smoothed_mar > MAR_THRESHOLD else "Normal",
-                              delta_color="inverse")
-            metric_pitch.metric("Head Pitch", f"{smoothed_pitch:.1f}°",
-                                delta="High!" if smoothed_pitch > HEAD_TILT_THRESHOLD else "Normal",
-                                delta_color="inverse")
+            metric_mar.metric("MAR (Yawn Metric)", f"{smoothed_mar:.2f}")
+            metric_pitch.metric("Head Pitch", f"{smoothed_pitch:.1f}°")
             metric_closed.metric("Eye Closed Duration", f"{eye_closed_duration:.1f}s")
             metric_score.metric("Total Drowsiness Score", f"{drowsy_score}/5")
+            
+            # Update Live Graph
+            chart_placeholder.line_chart(list(score_history), color="#FF4B4B")
 
         frame_placeholder.image(rgb, channels="RGB")
 
